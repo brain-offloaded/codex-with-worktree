@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+      - name: Run tests
+        run: go test ./...
+      - name: Build Linux amd64 binary
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o dist/cwt-linux-amd64 ./cmd/cwt
+          tar -C dist -czf dist/cwt-linux-amd64.tar.gz cwt-linux-amd64
+          sha256sum dist/cwt-linux-amd64 dist/cwt-linux-amd64.tar.gz > dist/sha256sum.txt
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/cwt-linux-amd64
+            dist/cwt-linux-amd64.tar.gz
+            dist/sha256sum.txt

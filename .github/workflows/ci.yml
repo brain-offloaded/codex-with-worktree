@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+      - name: Verify module graph
+        run: go mod tidy && git diff --exit-code
+      - name: Run tests
+        run: go test ./...
+      - name: Build
+        run: go build ./cmd/cwt
