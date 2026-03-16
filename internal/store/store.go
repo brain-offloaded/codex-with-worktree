@@ -230,6 +230,15 @@ WHERE repo_root = ?
 	return err
 }
 
+func (s *Store) MarkWorktreeDeleted(repoRoot, path string, when time.Time) error {
+	_, err := s.db.Exec(`
+UPDATE worktrees
+SET deleted_at = ?, last_reconciled_at = ?
+WHERE repo_root = ? AND path = ?
+`, when.UTC().Format(time.RFC3339), when.UTC().Format(time.RFC3339), repoRoot, path)
+	return err
+}
+
 func (s *Store) RefreshWorktreeSessionStats(repoRoot string, reconciledAt time.Time) error {
 	_, err := s.db.Exec(`
 UPDATE worktrees

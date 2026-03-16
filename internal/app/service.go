@@ -175,6 +175,22 @@ func (s *Service) CreateWorktree(repoRoot, name, branch, path string) (string, e
 	return path, nil
 }
 
+func (s *Service) CreateTrackedWorktree(st *store.Store, repoRoot, name, branch, path string) (string, error) {
+	targetPath, err := s.CreateWorktree(repoRoot, name, branch, path)
+	if err != nil {
+		return "", err
+	}
+	if err := st.RecordEvent(store.EventRecord{
+		Timestamp: s.Now().UTC(),
+		Kind:      "worktree_created",
+		CWD:       targetPath,
+		Payload:   `{"branch":"` + firstNonEmpty(branch, name) + `"}`,
+	}); err != nil {
+		return "", err
+	}
+	return targetPath, nil
+}
+
 func (s *Service) RemoveWorktree(repoRoot, path string, force bool) error {
 	args := []string{"-C", repoRoot, "worktree", "remove"}
 	if force {
@@ -188,6 +204,22 @@ func (s *Service) RemoveWorktree(repoRoot, path string, force bool) error {
 	return cmd.Run()
 }
 
+func (s *Service) RemoveTrackedWorktree(st *store.Store, repoRoot, path string, force bool, eventKind string) error {
+	if err := s.RemoveWorktree(repoRoot, path, force); err != nil {
+		return err
+	}
+	now := s.Now().UTC()
+	if err := st.MarkWorktreeDeleted(repoRoot, path, now); err != nil {
+		return err
+	}
+	return st.RecordEvent(store.EventRecord{
+		Timestamp: now,
+		Kind:      eventKind,
+		CWD:       path,
+		Payload:   `{"force":` + strconv.FormatBool(force) + `}`,
+	})
+}
+
 func (s *Service) ExecCodex(dir string, args []string) error {
 	cmd := exec.Command("codex", args...)
 	cmd.Dir = dir
@@ -196,6 +228,19 @@ func (s *Service) ExecCodex(dir string, args []string) error {
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
 	return cmd.Run()
+}
+
+func (s *Service) SelectWorktree(st *store.Store, path string) error {
+	now := s.Now().UTC()
+	if err := st.RecordSelection(path, now); err != nil {
+		return err
+	}
+	return st.RecordEvent(store.EventRecord{
+		Timestamp: now,
+		Kind:      "worktree_selected",
+		CWD:       path,
+		Payload:   `{"source":"cwt"}`,
+	})
 }
 
 func (s *Service) PrintList(views []WorktreeView) {
@@ -217,18 +262,26 @@ func (s *Service) PrintList(views []WorktreeView) {
 	_ = tw.Flush()
 }
 
-func (s *Service) Cleanup(repoRoot string, views []WorktreeView, staleDays int, apply bool) error {
+func (s *Service) Cleanup(st *store.Store, repoRoot string, views []WorktreeView, staleDays int, apply bool) error {
 	now := s.Now()
 	threshold := time.Duration(staleDays) * 24 * time.Hour
 	for _, v := range views {
 		if !IsStaleCandidate(v, now, threshold) {
 			continue
 		}
+		if err := st.RecordEvent(store.EventRecord{
+			Timestamp: now.UTC(),
+			Kind:      "cleanup_candidate",
+			CWD:       v.Path,
+			Payload:   `{"branch":"` + displayOrDash(v.Branch) + `"}`,
+		}); err != nil {
+			return err
+		}
 		if !apply {
 			fmt.Printf("stale\t%s\tbranch=%s\n", v.Path, displayOrDash(v.Branch))
 			continue
 		}
-		if err := s.RemoveWorktree(repoRoot, v.Path, false); err != nil {
+		if err := s.RemoveTrackedWorktree(st, repoRoot, v.Path, false, "cleanup_removed"); err != nil {
 			return err
 		}
 		fmt.Printf("removed\t%s\n", v.Path)
@@ -291,13 +344,6 @@ func displayOrDash(v string) string {
 		return "-"
 	}
 	return v
-}
-
-func nullableTime(t time.Time) *time.Time {
-	if t.IsZero() {
-		return nil
-	}
-	return &t
 }
 
 func sanitizeBranchName(v string) string {
