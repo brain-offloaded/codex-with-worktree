@@ -46,36 +46,70 @@ func (s *Service) Sync(repoRoot string, st *store.Store, codexHome string) ([]Wo
 		return nil, err
 	}
 	commonRoot := items[0].Path
+	now := s.Now().UTC()
+	if err := st.RecordEvent(store.EventRecord{
+		Timestamp: now,
+		Kind:      "reconcile_started",
+		CWD:       commonRoot,
+		Payload:   `{"repo_root":"` + commonRoot + `"}`,
+	}); err != nil {
+		return nil, err
+	}
 	logs, err := codexlog.Scan(codexHome)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, sess := range logs.BySession {
-		_ = st.UpsertSession(sess.SessionID, sess.CWD, sess.FirstSeenAt, sess.LastActivityAt, sess.TurnCount)
+		if err := st.UpsertSession(sess.SessionID, sess.CWD, sess.FirstSeenAt, sess.LastActivityAt, sess.TurnCount); err != nil {
+			return nil, err
+		}
+		if err := st.RecordEvent(store.EventRecord{
+			Timestamp: sess.LastActivityAt,
+			Kind:      "session_observed",
+			CWD:       sess.CWD,
+			SessionID: sess.SessionID,
+			Payload:   `{"turn_count":` + strconv.Itoa(sess.TurnCount) + `}`,
+		}); err != nil {
+			return nil, err
+		}
 	}
 
-	now := s.Now().UTC()
+	livePaths := make([]string, 0, len(items))
 	for _, item := range items {
+		livePaths = append(livePaths, item.Path)
 		record := store.WorktreeRecord{
-			Path:       item.Path,
-			RepoRoot:   commonRoot,
-			Branch:     item.Branch,
-			IsMain:     item.IsMain,
-			IsLocked:   item.Locked,
-			IsPrunable: item.Prunable,
-			LastSeenAt: &now,
-		}
-		if agg, ok := logs.ByCWD[item.Path]; ok {
-			record.SessionCount = agg.SessionCount
-			record.LastCodexTurnAt = nullableTime(agg.LastActivityAt)
+			Path:             item.Path,
+			RepoRoot:         commonRoot,
+			Branch:           item.Branch,
+			IsMain:           item.IsMain,
+			IsLocked:         item.Locked,
+			IsPrunable:       item.Prunable,
+			LastSeenAt:       &now,
+			DeletedAt:        nil,
+			LastReconciledAt: &now,
 		}
 		if err := st.UpsertWorktree(record); err != nil {
 			return nil, err
 		}
 	}
 
-	rows, err := st.ListWorktrees()
+	if err := st.MarkMissingWorktreesDeleted(commonRoot, livePaths, now); err != nil {
+		return nil, err
+	}
+	if err := st.RefreshWorktreeSessionStats(commonRoot, now); err != nil {
+		return nil, err
+	}
+	if err := st.RecordEvent(store.EventRecord{
+		Timestamp: now,
+		Kind:      "reconcile_completed",
+		CWD:       commonRoot,
+		Payload:   `{"live_count":` + strconv.Itoa(len(livePaths)) + `}`,
+	}); err != nil {
+		return nil, err
+	}
+
+	rows, err := st.ListActiveWorktrees(commonRoot)
 	if err != nil {
 		return nil, err
 	}
