@@ -32,6 +32,9 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "cwt must run inside a git repository or worktree")
 		return 1
 	}
+	if items, err := gitwt.List(repoRoot); err == nil && len(items) > 0 {
+		repoRoot = items[0].Path
+	}
 
 	st, err := store.Open(app.DefaultStateDBPath())
 	if err != nil {
@@ -82,25 +85,25 @@ func runPickAndExec(service *app.Service, st *store.Store, repoRoot string, args
 			continue
 		case picker.ActionDelete:
 			target := views[result.Index]
-			if err := service.RemoveWorktree(repoRoot, target.Path, result.Force); err != nil {
+			if err := service.RemoveTrackedWorktree(st, repoRoot, target.Path, result.Force, "worktree_removed"); err != nil {
 				return err
 			}
 			continue
 		case picker.ActionCreate:
-			targetPath, err := service.CreateWorktree(repoRoot, result.Name, result.Branch, "")
+			targetPath, err := service.CreateTrackedWorktree(st, repoRoot, result.Name, result.Branch, "")
 			if err != nil {
 				return err
 			}
 			if _, err := service.Sync(repoRoot, st, app.DefaultCodexHome()); err != nil {
 				return err
 			}
-			if err := st.RecordSelection(targetPath, service.Now()); err != nil {
+			if err := service.SelectWorktree(st, targetPath); err != nil {
 				return err
 			}
 			return service.ExecCodex(targetPath, args)
 		case picker.ActionSelect:
 			target := views[result.Index]
-			if err := st.RecordSelection(target.Path, service.Now()); err != nil {
+			if err := service.SelectWorktree(st, target.Path); err != nil {
 				return err
 			}
 			return service.ExecCodex(target.Path, args)
@@ -138,7 +141,7 @@ func runInternal(service *app.Service, st *store.Store, repoRoot string, plan ap
 				}
 			}
 		}
-		targetPath, err := service.CreateWorktree(repoRoot, name, branch, path)
+		targetPath, err := service.CreateTrackedWorktree(st, repoRoot, name, branch, path)
 		if err != nil {
 			return err
 		}
@@ -149,7 +152,7 @@ func runInternal(service *app.Service, st *store.Store, repoRoot string, plan ap
 			return errors.New("usage: cwt remove <path> [--force]")
 		}
 		force := len(plan.CodexArgs) > 1 && plan.CodexArgs[1] == "--force"
-		return service.RemoveWorktree(repoRoot, plan.CodexArgs[0], force)
+		return service.RemoveTrackedWorktree(st, repoRoot, plan.CodexArgs[0], force, "worktree_removed")
 	case "cleanup":
 		staleDays := 30
 		apply := false
@@ -172,7 +175,7 @@ func runInternal(service *app.Service, st *store.Store, repoRoot string, plan ap
 		if err != nil {
 			return err
 		}
-		return service.Cleanup(repoRoot, views, staleDays, apply)
+		return service.Cleanup(st, repoRoot, views, staleDays, apply)
 	case "doctor":
 		fmt.Println("repo_root:", repoRoot)
 		fmt.Println("state_db:", app.DefaultStateDBPath())
@@ -181,7 +184,22 @@ func runInternal(service *app.Service, st *store.Store, repoRoot string, plan ap
 		if err != nil {
 			return err
 		}
+		active, err := st.ListActiveWorktrees(repoRoot)
+		if err != nil {
+			return err
+		}
+		deleted, err := st.ListDeletedWorktrees(repoRoot)
+		if err != nil {
+			return err
+		}
+		events, err := st.ListEvents()
+		if err != nil {
+			return err
+		}
 		fmt.Println("worktrees:", len(views))
+		fmt.Println("active_rows:", len(active))
+		fmt.Println("deleted_rows:", len(deleted))
+		fmt.Println("events:", len(events))
 		return nil
 	default:
 		return fmt.Errorf("unsupported internal command: %s", plan.InternalCommand)

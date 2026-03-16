@@ -22,6 +22,8 @@ WSL에서 바로 쓰기 쉬운 Linux 단일 바이너리 배포를 첫 목표로
 - `cwt cleanup`으로 오래된 worktree 후보를 찾거나 정리합니다.
 - 상태 DB는 `$XDG_STATE_HOME/cwt/index.sqlite` 또는 `~/.local/state/cwt/index.sqlite`에 저장됩니다.
 - Codex 세션 정보는 `$CODEX_HOME/sessions` 또는 `~/.codex/sessions`를 스캔해서 추론합니다.
+- SQLite는 단순 캐시가 아니라 reconcile 이후 `cwt`가 실제로 읽는 운영 상태 저장소입니다.
+- 핵심 액션은 `events` 테이블에 누적되어 정리 이력과 감사 로그로 사용됩니다.
 
 ## 요구 사항
 
@@ -110,6 +112,7 @@ SQLite 테이블:
 - 마지막 Codex 활동 시각
 - Codex 세션 수
 - launch 횟수
+- deleted / reconciled 시각
 
 ## 테스트
 

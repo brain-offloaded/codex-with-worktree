@@ -22,6 +22,8 @@ See the formal specification in [docs/spec.md](docs/spec.md).
 - `cwt cleanup` identifies or removes stale worktrees.
 - SQLite state is stored under `$XDG_STATE_HOME/cwt/index.sqlite` or `~/.local/state/cwt/index.sqlite`.
 - Codex session metadata is inferred from `$CODEX_HOME/sessions` or `~/.codex/sessions`.
+- SQLite is the operational state store after reconcile, not only a passive cache.
+- Key actions are appended to an `events` table for audit and cleanup history.
 
 ## Requirements
 
@@ -110,6 +112,7 @@ Tracked worktree fields include:
 - last Codex activity timestamp
 - Codex session count
 - launch count
+- deleted / reconciled timestamps
 
 ## Testing
 
