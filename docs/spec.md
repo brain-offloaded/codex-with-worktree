@@ -97,6 +97,16 @@ For `v0.0.1`, a terminal-driven interactive picker is sufficient. It does not ne
 
 ## Metadata Model
 
+For `v0.0.2`, SQLite is not only a cache. It is the operational state store for:
+
+1. active worktree listing
+2. stale cleanup decisions
+3. launch and selection history
+4. session aggregation
+5. audit history of key actions
+
+Git worktree state and Codex session logs remain external inputs, but they must be reconciled into SQLite before `cwt` renders picker/list/cleanup output.
+
 SQLite database location:
 
 - default: `$XDG_STATE_HOME/cwt/index.sqlite`
@@ -118,6 +128,8 @@ Tables:
 - `session_count`
 - `launch_count`
 - `last_seen_at`
+- `deleted_at`
+- `last_reconciled_at`
 
 ### `sessions`
 
@@ -136,6 +148,17 @@ Tables:
 - `session_id`
 - `payload_json`
 
+Event kinds must include at least:
+
+- `reconcile_started`
+- `reconcile_completed`
+- `session_observed`
+- `worktree_selected`
+- `worktree_created`
+- `worktree_removed`
+- `cleanup_candidate`
+- `cleanup_removed`
+
 ## Session Discovery
 
 `cwt` must discover Codex session metadata by scanning JSONL files under:
@@ -150,7 +173,25 @@ The implementation must:
    - session existence
    - last activity time
    - approximate turn count
-3. Aggregate session information by worktree path.
+3. Upsert session rows into SQLite.
+4. Recompute worktree session aggregates from SQLite, not only in memory.
+
+## Reconcile Rules
+
+Every command that depends on worktree state must run a reconcile phase first.
+
+Reconcile steps:
+
+1. record `reconcile_started`
+2. collect live Git worktrees
+3. upsert live worktrees into `worktrees`
+4. mark previously known but now missing worktrees as deleted by setting `deleted_at`
+5. scan Codex session logs and upsert `sessions`
+6. recompute `worktrees.session_count` and `worktrees.last_codex_turn_at` from `sessions`
+7. set `last_reconciled_at`
+8. record `reconcile_completed`
+
+The picker, `list`, `cleanup`, and `doctor` commands must read from SQLite-backed query methods after reconcile completes.
 
 ## Cleanup Rules
 
@@ -165,6 +206,8 @@ Default stale threshold: `30` days.
 
 `--apply` removes matching worktrees with `git worktree remove`.
 Without `--apply`, the command performs a dry run.
+
+Both dry-run and apply modes must write cleanup events to SQLite.
 
 ## Out Of Scope For `v0.0.1`
 
@@ -182,6 +225,10 @@ The project is developed with tests first for core behavior:
 2. session log parser tests
 3. stale classification tests
 4. command dispatch / passthrough planning tests
-5. SQLite store tests
-
-Integration tests should cover command behavior using temporary Git repositories where practical.
+5. SQLite migration and query tests
+6. reconcile tests for:
+   - active worktree upsert
+   - deleted worktree marking
+   - session aggregate refresh
+   - event recording
+7. integration tests using temporary Git repositories for create/remove/cleanup flows where practical
