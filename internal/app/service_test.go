@@ -185,6 +185,77 @@ func TestCleanupRecordsCandidateEvents(t *testing.T) {
 	}
 }
 
+func TestCreateTrackedWorktreeRecordsCreateEvent(t *testing.T) {
+	repoRoot, _ := initGitRepoWithWorktree(t)
+	st, err := store.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer st.Close()
+
+	service := &Service{Now: func() time.Time { return time.Date(2026, 3, 17, 0, 0, 0, 0, time.UTC) }}
+	targetPath, err := service.CreateTrackedWorktree(st, repoRoot, "feature-two", "feat/two", "")
+	if err != nil {
+		t.Fatalf("CreateTrackedWorktree returned error: %v", err)
+	}
+	if _, err := service.Sync(repoRoot, st, t.TempDir()); err != nil {
+		t.Fatalf("Sync returned error: %v", err)
+	}
+
+	events, err := st.ListEvents()
+	if err != nil {
+		t.Fatalf("ListEvents returned error: %v", err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Kind == "worktree_created" && event.CWD == targetPath {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected worktree_created event")
+	}
+}
+
+func TestRemoveTrackedWorktreeMarksDeletedAndRecordsEvent(t *testing.T) {
+	repoRoot, worktreePath := initGitRepoWithWorktree(t)
+	st, err := store.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer st.Close()
+
+	service := &Service{Now: func() time.Time { return time.Date(2026, 3, 17, 0, 0, 0, 0, time.UTC) }}
+	if _, err := service.Sync(repoRoot, st, t.TempDir()); err != nil {
+		t.Fatalf("Sync returned error: %v", err)
+	}
+	if err := service.RemoveTrackedWorktree(st, repoRoot, worktreePath, false, "worktree_removed"); err != nil {
+		t.Fatalf("RemoveTrackedWorktree returned error: %v", err)
+	}
+
+	deleted, err := st.ListDeletedWorktrees(repoRoot)
+	if err != nil {
+		t.Fatalf("ListDeletedWorktrees returned error: %v", err)
+	}
+	if len(deleted) != 1 || deleted[0].Path != worktreePath {
+		t.Fatalf("unexpected deleted rows: %#v", deleted)
+	}
+
+	events, err := st.ListEvents()
+	if err != nil {
+		t.Fatalf("ListEvents returned error: %v", err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Kind == "worktree_removed" && event.CWD == worktreePath {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected worktree_removed event")
+	}
+}
+
 func initGitRepoWithWorktree(t *testing.T) (string, string) {
 	t.Helper()
 
